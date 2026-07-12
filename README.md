@@ -2,7 +2,11 @@
 
 A Python tool that takes any URL — YouTube video, blog post, news article, or generic webpage — extracts the content, and returns a structured JSON summary powered by the [Groq API](https://console.groq.com/).
 
-Use it from the **CLI** or the **web UI** — paste a link and get an instant summary. Nothing is stored on the server.
+Use it from the **CLI** or the **web UI**. Paste a link, get an instant summary. Nothing is stored on the server.
+
+**Live demo:** [https://smart-summarizer-ux12.onrender.com/](https://smart-summarizer-ux12.onrender.com/)
+
+> On Render's free tier, the app **spins down after ~15 minutes of inactivity**. The first visit after that may take **up to ~1 minute** to load while the server wakes up. Later requests are fast until it idles again.
 
 ## How It Works
 
@@ -11,37 +15,39 @@ URL → extractor.py → summarizer.py (Groq) → Pydantic validation → JSON
 ```
 
 1. **Extract** — Route the URL to the best strategy:
-   - **YouTube** → `youtube-transcript-api` (captions) + oEmbed (title)
+   - **YouTube** → [Supadata](https://supadata.ai) when `SUPADATA_API_KEY` is set (production), otherwise `youtube-transcript-api` (local)
    - **Articles** → `newspaper3k` (news/blogs)
    - **Fallback** → `requests` + `BeautifulSoup` (`<title>` and `<p>` tags)
-2. **Summarize** — Send extracted text to Groq with a structured JSON prompt
-3. **Validate** — Parse and validate the response with Pydantic before output
+2. **Summarize** — Send extracted text to Groq with structured JSON output (`response_format: json_object`)
+3. **Validate** — Parse with Pydantic and return the result
 
-Progress messages go to **stderr**; JSON goes to **stdout** or `--output`.
+CLI: progress on **stderr**, JSON on **stdout** or `--output`.  
+Web UI: result shown in the browser (stateless, no database).
 
 ## Features
 
-- YouTube transcript extraction (manual or auto-generated captions)
+- YouTube transcript extraction (Supadata on cloud, free API locally)
 - News and blog extraction via `newspaper3k`
 - Generic webpage fallback via BeautifulSoup
-- Structured JSON output with sentiment and key points
-- Pydantic validation and one automatic retry on invalid JSON
-- Local `word_count` (not guessed by the model)
-- **Web UI** — paste a URL and view the summary in the browser (stateless, no database)
+- Structured JSON with title, key points, sentiment, and summary
+- Pydantic validation and automatic retry on invalid JSON
+- Local `word_count` (computed from extracted text, not guessed by the model)
+- Web UI + REST API (FastAPI)
+- Deploy-ready for [Render](https://render.com) via `render.yaml`
 
 ## Output Format
 
 ```json
 {
-  "title": "Once you get money, upgrade these 10 things immediately",
+  "title": "HSC exams to continue nationwide, except under Chattogram Board",
   "key_points": [
-    "Upgrade sleep setup for better mental health",
-    "Invest in health access and pension contributions"
+    "Exams continue under eight boards as scheduled",
+    "Chattogram Board exams postponed due to floods"
   ],
-  "sentiment": "positive",
-  "summary": "The video discusses 10 upgrades to make once you start earning more...",
-  "source_type": "youtube",
-  "word_count": 3087
+  "sentiment": "neutral",
+  "summary": "The Bangladesh Inter-Education Board Coordination Committee confirmed...",
+  "source_type": "article",
+  "word_count": 171
 }
 ```
 
@@ -57,7 +63,8 @@ Progress messages go to **stderr**; JSON goes to **stdout** or `--output`.
 ## Requirements
 
 - Python 3.10+
-- [Groq API key](https://console.groq.com/)
+- [Groq API key](https://console.groq.com/) (required)
+- [Supadata API key](https://supadata.ai) (optional — for YouTube on cloud hosts)
 
 ## Setup
 
@@ -70,26 +77,37 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# Edit .env and set GROQ_API_KEY=<your-key>
+# Edit .env — at minimum set GROQ_API_KEY
 ```
 
-## Usage
+### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GROQ_API_KEY` | Yes | Groq API key for summarization |
+| `SUPADATA_API_KEY` | For YouTube on Render | [Supadata](https://supadata.ai) key — 100 free requests/month |
+| `LOG_LEVEL` | No | Logging level (`INFO`, `DEBUG`) — default `INFO` |
+| `YOUTUBE_PROXY_URL` | No | Optional residential proxy (alternative to Supadata) |
+| `WEBSHARE_PROXY_USERNAME` | No | Webshare proxy user (with password below) |
+| `WEBSHARE_PROXY_PASSWORD` | No | Webshare proxy password |
+
+## CLI Usage
 
 ```bash
-# Summarize a YouTube video
+# Summarize a YouTube video (uses youtube-transcript-api locally)
 python -m smartsummarizer https://www.youtube.com/watch?v=RaLlpEQv_LA
 
-# Summarize an article or webpage
-python -m smartsummarizer https://techcrunch.com/some-article
+# Summarize a news article
+python -m smartsummarizer https://www.thedailystar.net/news/bangladesh/education/news/hsc-exams-continue-nationwide-except-under-chattogram-board-4222101
 
 # Save to a file
-python -m smartsummarizer https://www.youtube.com/watch?v=RaLlpEQv_LA --output result.json
+python -m smartsummarizer https://example.com/article --output result.json
 
 # Use a different Groq model
 python -m smartsummarizer https://example.com --model openai/gpt-oss-120b
 ```
 
-### CLI Options
+### CLI options
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -97,7 +115,7 @@ python -m smartsummarizer https://example.com --model openai/gpt-oss-120b
 | `--model` | Groq model ID | `llama-3.3-70b-versatile` |
 | `--output` | Write JSON to file instead of stdout | stdout |
 
-### Supported Groq Models
+### Supported Groq models
 
 | Model | Best for |
 |-------|----------|
@@ -109,53 +127,90 @@ See [Groq deprecations](https://console.groq.com/docs/deprecations) for current 
 
 ## Web UI
 
-Start the local web server:
-
 ```bash
 source .venv/bin/activate
 python -m smartsummarizer.web
 ```
 
-Open **http://127.0.0.1:8000** in your browser. Paste a URL, click **Summarize**, and the result appears on the right. Summaries are **not saved** — refresh the page and they are gone.
+Open **http://127.0.0.1:8000** — paste a URL, click **Summarize**, view the result on the right.
 
-### API
+### API endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/summarize` | Summarize a URL (returns JSON, does not persist) |
-| `GET` | `/health` | Health check for deployment |
+| `POST` | `/api/summarize` | Summarize a URL (`{"url": "...", "model": "..."}`) |
+| `GET` | `/health` | Health check |
+| `GET` | `/` | Web UI |
 
-## Deploy to GitHub + Render
+Example:
 
-This app is **stateless** (no database), which makes deployment straightforward.
+```bash
+curl -X POST http://127.0.0.1:8000/api/summarize \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+```
 
-1. Push the repo to GitHub
-2. Sign up at [Render](https://render.com) and connect your GitHub repo
-3. Create a **Web Service** — Render will detect `render.yaml` automatically
-4. Add environment variable: `GROQ_API_KEY` = your Groq API key
-5. Deploy — Render runs:
-   ```bash
-   uvicorn smartsummarizer.web.app:app --host 0.0.0.0 --port $PORT
-   ```
+## Deploy to Render
 
-> **Note:** GitHub Pages only hosts static files and cannot run this Python backend. Use Render (free tier), Railway, or Fly.io to host the FastAPI app. Keep `GROQ_API_KEY` as a server-side secret — never expose it in the frontend or commit it to GitHub.
+Stateless — no database required.
 
-### YouTube on Render (important)
+### 1. Push to GitHub
 
-YouTube **blocks requests from cloud provider IPs** (Render, AWS, GCP, Azure). This is a YouTube restriction, not a bug in SmartSummarizer.
+Ensure `.env` is **not** committed (it's in `.gitignore`).
+
+### 2. Create a Web Service on Render
+
+Connect your GitHub repo. Render can auto-detect [`render.yaml`](render.yaml).
+
+| Setting | Value |
+|---------|--------|
+| **Build Command** | `pip install -r requirements.txt` |
+| **Start Command** | `uvicorn smartsummarizer.web.app:app --host 0.0.0.0 --port $PORT` |
+
+> `$PORT` is set automatically by Render — do not hardcode it.
+
+### 3. Environment variables (Render dashboard)
+
+| Variable | Required |
+|----------|----------|
+| `GROQ_API_KEY` | Yes |
+| `SUPADATA_API_KEY` | Yes, for YouTube |
+| `ENV` | `production` (optional, set in render.yaml) |
+| `LOG_LEVEL` | `INFO` (optional) |
+
+### 4. Redeploy and test
+
+Open your Render URL and try an article URL first, then YouTube (with Supadata key set).
+
+**Cold starts (free tier):** After long inactivity, Render stops the service to save resources. The first request can take **~1 minute** before the site responds; subsequent requests are normal until the next idle period.
+
+> GitHub Pages cannot run this app — it needs a Python server. Keep API keys server-side only.
+
+### YouTube on cloud hosts
+
+YouTube **blocks datacenter IPs** (Render, AWS, etc.). SmartSummarizer handles this automatically:
+
+| Environment | YouTube provider | Setup |
+|-------------|------------------|-------|
+| **Local** | `youtube-transcript-api` | Free, no extra key |
+| **Render / cloud** | [Supadata](https://supadata.ai) | Set `SUPADATA_API_KEY` |
+
+**Supadata free tier:** 100 credits/month, 1 request/sec, no credit card. Each YouTube summary = 1 credit.
+
+1. Sign up at [supadata.ai](https://supadata.ai)
+2. Add `SUPADATA_API_KEY` in Render Environment
+3. Redeploy
+
+Check Render **Logs** for Supadata status — search for `Supadata:` or `YouTube extract:`.
+
+Docs: [Supadata YouTube transcript API](https://docs.supadata.ai/api-reference/endpoint/youtube/transcript)
+
+**Alternatives:** run the CLI locally for free YouTube, or use a residential proxy (`YOUTUBE_PROXY_URL` / Webshare — see `.env.example`).
 
 | URL type | Works on Render? |
 |----------|------------------|
-| Articles / blogs / most webpages | Yes |
-| YouTube videos | Usually **no** (IP blocked) |
-
-**Options:**
-
-1. **Use article URLs** on your hosted app (recommended, no extra setup)
-2. **Run the CLI locally** for YouTube: `python -m smartsummarizer <youtube-url>`
-3. **Add a residential proxy** on Render (advanced, paid) — set in Environment:
-   - `YOUTUBE_PROXY_URL=http://user:pass@host:port`, or
-   - `WEBSHARE_PROXY_USERNAME` + `WEBSHARE_PROXY_PASSWORD` ([Webshare residential](https://www.webshare.io/))
+| Articles / blogs / webpages | Yes |
+| YouTube | Yes, with `SUPADATA_API_KEY` |
 
 ## Project Structure
 
@@ -163,20 +218,20 @@ YouTube **blocks requests from cloud provider IPs** (Render, AWS, GCP, Azure). T
 SmartSummarizer/
 ├── .env.example
 ├── requirements.txt
-├── render.yaml           # Render.com deploy config
+├── render.yaml              # Render.com deploy config
 ├── README.md
 ├── smartsummarizer/
 │   ├── __init__.py
-│   ├── __main__.py       # python -m smartsummarizer
-│   ├── cli.py            # CLI entry point
-│   ├── extractor.py      # URL routing + content extraction
-│   ├── summarizer.py     # Groq API + JSON validation
-│   ├── models.py         # Pydantic schemas
-│   ├── static/           # Web UI (HTML, CSS, JS)
+│   ├── __main__.py          # python -m smartsummarizer
+│   ├── cli.py               # CLI entry point
+│   ├── extractor.py         # URL routing + Supadata / newspaper / BS4
+│   ├── summarizer.py        # Groq API + JSON validation
+│   ├── models.py            # Pydantic schemas
+│   ├── static/              # Web UI (HTML, CSS, JS)
 │   └── web/
-│       ├── __main__.py   # python -m smartsummarizer.web
-│       ├── app.py        # FastAPI routes
-│       └── service.py    # Extract + summarize
+│       ├── __main__.py      # python -m smartsummarizer.web
+│       ├── app.py           # FastAPI routes + logging
+│       └── service.py       # Extract + summarize orchestration
 └── tests/
     ├── test_extractor.py
     └── test_summarizer.py
@@ -191,18 +246,20 @@ pytest tests/ -v
 
 ## Limitations
 
-- **YouTube** — Requires captions; videos with transcripts disabled will fail
+- **YouTube** — Requires captions; Supadata free tier is 100 requests/month
+- **Cloud YouTube** — Blocked without `SUPADATA_API_KEY` or a residential proxy
 - **JavaScript pages** — BS4 fallback only reads static HTML
-- **Long content** — Text is truncated to ~24,000 characters before sending to Groq
+- **Long content** — Text truncated to ~24,000 characters before Groq
 
 ## Tech Stack
 
 | Package | Purpose |
 |---------|---------|
 | `groq` | LLM summarization |
-| `youtube-transcript-api` | YouTube captions |
+| `youtube-transcript-api` | YouTube captions (local) |
+| Supadata API | YouTube captions (cloud production) |
 | `newspaper3k` | Article extraction |
 | `requests` + `beautifulsoup4` | Webpage fallback |
 | `pydantic` | JSON validation |
-| `python-dotenv` | Load `GROQ_API_KEY` from `.env` |
+| `python-dotenv` | Environment variables |
 | `fastapi` + `uvicorn` | Web UI and REST API |

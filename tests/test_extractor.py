@@ -105,6 +105,25 @@ class TestExtractYoutube:
             extract("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
 
+class TestExtractYoutubeSupadata:
+    @patch("smartsummarizer.extractor._fetch_youtube_title", return_value="Test Video")
+    @patch("smartsummarizer.extractor.requests.get")
+    def test_supadata_used_when_api_key_set(self, mock_get, mock_title, monkeypatch):
+        monkeypatch.setenv("SUPADATA_API_KEY", "test-supadata-key")
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"content": "Supadata transcript text here."}
+        mock_get.return_value = mock_resp
+
+        result = extract("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        assert result.source_type == "youtube"
+        assert "Supadata transcript" in result.text
+        mock_get.assert_called_once()
+        call_kwargs = mock_get.call_args
+        assert call_kwargs[1]["headers"]["x-api-key"] == "test-supadata-key"
+
+
 # ---------------------------------------------------------------------------
 # Article extraction (newspaper3k)
 # ---------------------------------------------------------------------------
