@@ -198,6 +198,13 @@ body {
   color: #f07178;
 }
 
+.hosting-note {
+  margin: 1rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
 .panel-result {
   min-height: 400px;
 }

@@ -140,6 +140,23 @@ This app is **stateless** (no database), which makes deployment straightforward.
 
 > **Note:** GitHub Pages only hosts static files and cannot run this Python backend. Use Render (free tier), Railway, or Fly.io to host the FastAPI app. Keep `GROQ_API_KEY` as a server-side secret — never expose it in the frontend or commit it to GitHub.
 
+### YouTube on Render (important)
+
+YouTube **blocks requests from cloud provider IPs** (Render, AWS, GCP, Azure). This is a YouTube restriction, not a bug in SmartSummarizer.
+
+| URL type | Works on Render? |
+|----------|------------------|
+| Articles / blogs / most webpages | Yes |
+| YouTube videos | Usually **no** (IP blocked) |
+
+**Options:**
+
+1. **Use article URLs** on your hosted app (recommended, no extra setup)
+2. **Run the CLI locally** for YouTube: `python -m smartsummarizer <youtube-url>`
+3. **Add a residential proxy** on Render (advanced, paid) — set in Environment:
+   - `YOUTUBE_PROXY_URL=http://user:pass@host:port`, or
+   - `WEBSHARE_PROXY_USERNAME` + `WEBSHARE_PROXY_PASSWORD` ([Webshare residential](https://www.webshare.io/))
+
 ## Project Structure
 
 ```

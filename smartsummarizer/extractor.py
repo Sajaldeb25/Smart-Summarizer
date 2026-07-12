@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from urllib.parse import parse_qs, urlparse
 
@@ -11,16 +12,23 @@ from bs4 import BeautifulSoup
 # youtube_transcript_api is used to extract the transcript from a YouTube video
 try:
     from youtube_transcript_api import (
+        IpBlocked,
         NoTranscriptFound,
+        RequestBlocked,
         TranscriptsDisabled,
         YouTubeTranscriptApi,
     )
+    from youtube_transcript_api.proxies import GenericProxyConfig, WebshareProxyConfig
     _YOUTUBE_AVAILABLE = True
 except ImportError:
     _YOUTUBE_AVAILABLE = False
     YouTubeTranscriptApi = None  # type: ignore[assignment]
     TranscriptsDisabled = None  # type: ignore[assignment]
     NoTranscriptFound = None  # type: ignore[assignment]
+    IpBlocked = None  # type: ignore[assignment]
+    RequestBlocked = None  # type: ignore[assignment]
+    GenericProxyConfig = None  # type: ignore[assignment]
+    WebshareProxyConfig = None  # type: ignore[assignment]
 
 # newspaper3k is used to extract the content from a webpage
 try:
@@ -77,6 +85,35 @@ def _fetch_youtube_title(video_id: str) -> str:
     return f"YouTube Video ({video_id})"
 
 
+def _youtube_ip_blocked_message() -> str:
+    return (
+        "YouTube blocked this request because the server runs on a cloud IP "
+        "(common on Render, AWS, etc.). YouTube URLs work locally but often fail "
+        "when hosted. Try an article or blog URL instead, run the CLI on your machine, "
+        "or configure a residential proxy via YOUTUBE_PROXY_URL (see README)."
+    )
+
+
+def _create_youtube_api() -> YouTubeTranscriptApi:
+    """Build YouTubeTranscriptApi, optionally routing through a proxy."""
+    proxy_url = os.getenv("YOUTUBE_PROXY_URL", "").strip()
+    webshare_user = os.getenv("WEBSHARE_PROXY_USERNAME", "").strip()
+    webshare_pass = os.getenv("WEBSHARE_PROXY_PASSWORD", "").strip()
+
+    if webshare_user and webshare_pass:
+        proxy_config = WebshareProxyConfig(
+            proxy_username=webshare_user,
+            proxy_password=webshare_pass,
+        )
+        return YouTubeTranscriptApi(proxy_config=proxy_config)
+
+    if proxy_url:
+        proxy_config = GenericProxyConfig(http_url=proxy_url, https_url=proxy_url)
+        return YouTubeTranscriptApi(proxy_config=proxy_config)
+
+    return YouTubeTranscriptApi()
+
+
 def _extract_youtube(url: str, video_id: str) -> ExtractedContent:
     """Extract transcript and title from a YouTube video.
 
@@ -89,8 +126,7 @@ def _extract_youtube(url: str, video_id: str) -> ExtractedContent:
         raise ExtractionError("youtube-transcript-api is not installed.")
 
     try:
-        # create an instance of the YouTubeTranscriptApi class
-        api = YouTubeTranscriptApi()
+        api = _create_youtube_api()
 
         # list the transcripts for the video
         transcript_list = api.list(video_id)
@@ -120,7 +156,11 @@ def _extract_youtube(url: str, video_id: str) -> ExtractedContent:
             f"No transcript found for video '{video_id}'. "
             "The video may not have captions available."
         )
+    except (IpBlocked, RequestBlocked):
+        raise ExtractionError(_youtube_ip_blocked_message())
     except Exception as exc:
+        if "blocking requests from your IP" in str(exc) or "IpBlocked" in type(exc).__name__:
+            raise ExtractionError(_youtube_ip_blocked_message()) from exc
         raise ExtractionError(f"Failed to fetch YouTube transcript: {exc}") from exc
 
     if not text.strip():

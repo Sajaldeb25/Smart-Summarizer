@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from groq import Groq
 
@@ -14,6 +15,9 @@ DEFAULT_MODEL = "llama-3.3-70b-versatile"
 # Approximate token budget for the user content (1 token ≈ 4 chars)
 _MAX_CHARS = 24_000
 
+# Strip control chars that break JSON if echoed unescaped by the model
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 _SYSTEM_PROMPT = """\
 You are a precise content summarizer. Given a piece of extracted web content, \
 return ONLY a single valid JSON object — no markdown fences, no explanation, \
@@ -22,11 +26,14 @@ just the raw JSON — with exactly these keys:
   "title"       : string  — the title of the content
   "key_points"  : array   — 3 to 5 concise key points as strings
   "sentiment"   : string  — exactly one of "positive", "neutral", or "negative"
-  "summary"     : string  — key points as bullet points in 15–20 sentences
+  "summary"     : string  — a concise 3–5 sentence summary (single paragraph, no line breaks)
   "source_type" : string  — exactly one of "youtube", "article", or "webpage"
   "word_count"  : integer — the word count value provided in the user message
 
-Do not include any other keys. Do not wrap the JSON in markdown code blocks.\
+Rules:
+- Do not include literal newlines or tabs inside JSON string values.
+- Do not wrap the JSON in markdown code blocks.
+- Do not include any other keys.\
 """
 
 
@@ -34,12 +41,15 @@ class SummarizationError(Exception):
     """Raised when the Groq API call fails or returns invalid structured output."""
 
 
-def _build_user_message(content: ExtractedContent, word_count: int) -> str:
-    text = content.text
+def _sanitize_text(text: str) -> str:
+    """Remove control characters from extracted content before sending to Groq."""
+    return _CONTROL_CHAR_RE.sub(" ", text)
 
-    # check if the text is longer than the maximum character count
+
+def _build_user_message(content: ExtractedContent, word_count: int) -> str:
+    text = _sanitize_text(content.text)
+
     if len(text) > _MAX_CHARS:
-        # truncate the text if it is longer than the maximum character count
         text = text[:_MAX_CHARS] + " [truncated]"
 
     return (
@@ -53,40 +63,35 @@ def _build_user_message(content: ExtractedContent, word_count: int) -> str:
 def _parse_groq_response(raw: str) -> dict:
     """Strip optional markdown fences and parse JSON from the model response."""
     raw = raw.strip()
-    # Remove ```json ... ``` or ``` ... ``` fences if the model included them
     if raw.startswith("```"):
         lines = raw.splitlines()
-        # Drop first line (```json or ```) and last line (```)
         inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
         raw = "\n".join(inner).strip()
-    return json.loads(raw)
+    # strict=False allows literal newlines/tabs inside strings (common LLM mistake)
+    return json.loads(raw, strict=False)
 
 
-def summarize(content: ExtractedContent, api_key: str | None = None, model: str = DEFAULT_MODEL,) -> SummaryOutput:
-    
+def summarize(
+    content: ExtractedContent,
+    api_key: str | None = None,
+    model: str = DEFAULT_MODEL,
+) -> SummaryOutput:
     """
     Send extracted content to the Groq API and return a validated SummaryOutput.
 
     Retries once if the first response cannot be parsed as valid JSON.
     Raises SummarizationError on API or validation failure.
-
     """
-    
     resolved_key = api_key or os.getenv("GROQ_API_KEY")
     if not resolved_key:
         raise SummarizationError(
             "GROQ_API_KEY is not set. Add it to your .env file or pass it explicitly."
         )
 
-    # Current Groq model recommendations (July 2026):
-    #   balanced default:  llama-3.3-70b-versatile  (default, available until Aug 16 2026)
-
-
     client = Groq(api_key=resolved_key)
     word_count = len(content.text.split())
     user_message = _build_user_message(content, word_count)
 
-    # API call to the Groq model
     last_error: Exception | None = None
     for attempt in range(2):
         try:
@@ -97,6 +102,7 @@ def summarize(content: ExtractedContent, api_key: str | None = None, model: str 
                     {"role": "user", "content": user_message},
                 ],
                 temperature=0.2,
+                response_format={"type": "json_object"},
             )
         except Exception as exc:
             raise SummarizationError(f"Groq API request failed: {exc}") from exc
@@ -105,17 +111,14 @@ def summarize(content: ExtractedContent, api_key: str | None = None, model: str 
 
         try:
             data = _parse_groq_response(raw_content)
-            # Enforce the locally computed word_count so the model can't hallucinate it
             data["word_count"] = word_count
             return SummaryOutput.model_validate(data)
-
-
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = exc
-            # Retry once with a stricter reminder in the user message
             user_message = user_message + (
                 "\n\nIMPORTANT: Your previous response was not valid JSON. "
-                "Return ONLY a raw JSON object — no markdown, no prose."
+                "Return ONLY a raw JSON object — no markdown, no prose, "
+                "and no line breaks inside string values."
             )
 
     raise SummarizationError(
