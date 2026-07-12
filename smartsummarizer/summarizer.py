@@ -22,7 +22,7 @@ just the raw JSON — with exactly these keys:
   "title"       : string  — the title of the content
   "key_points"  : array   — 3 to 5 concise key points as strings
   "sentiment"   : string  — exactly one of "positive", "neutral", or "negative"
-  "summary"     : string  — a concise 3–5 sentence summary
+  "summary"     : string  — key points as bullet points in 15–20 sentences
   "source_type" : string  — exactly one of "youtube", "article", or "webpage"
   "word_count"  : integer — the word count value provided in the user message
 

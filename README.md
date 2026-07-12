@@ -1,6 +1,8 @@
 # SmartSummarizer
 
-A Python CLI tool that takes any URL — YouTube video, blog post, news article, or generic webpage — extracts the content, and returns a structured JSON summary powered by the [Groq API](https://console.groq.com/).
+A Python tool that takes any URL — YouTube video, blog post, news article, or generic webpage — extracts the content, and returns a structured JSON summary powered by the [Groq API](https://console.groq.com/).
+
+Use it from the **CLI** or the **web UI** — paste a link and get an instant summary. Nothing is stored on the server.
 
 ## How It Works
 
@@ -25,6 +27,7 @@ Progress messages go to **stderr**; JSON goes to **stdout** or `--output`.
 - Structured JSON output with sentiment and key points
 - Pydantic validation and one automatic retry on invalid JSON
 - Local `word_count` (not guessed by the model)
+- **Web UI** — paste a URL and view the summary in the browser (stateless, no database)
 
 ## Output Format
 
@@ -104,12 +107,46 @@ python -m smartsummarizer https://example.com --model openai/gpt-oss-120b
 
 See [Groq deprecations](https://console.groq.com/docs/deprecations) for current model availability.
 
+## Web UI
+
+Start the local web server:
+
+```bash
+source .venv/bin/activate
+python -m smartsummarizer.web
+```
+
+Open **http://127.0.0.1:8000** in your browser. Paste a URL, click **Summarize**, and the result appears on the right. Summaries are **not saved** — refresh the page and they are gone.
+
+### API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/summarize` | Summarize a URL (returns JSON, does not persist) |
+| `GET` | `/health` | Health check for deployment |
+
+## Deploy to GitHub + Render
+
+This app is **stateless** (no database), which makes deployment straightforward.
+
+1. Push the repo to GitHub
+2. Sign up at [Render](https://render.com) and connect your GitHub repo
+3. Create a **Web Service** — Render will detect `render.yaml` automatically
+4. Add environment variable: `GROQ_API_KEY` = your Groq API key
+5. Deploy — Render runs:
+   ```bash
+   uvicorn smartsummarizer.web.app:app --host 0.0.0.0 --port $PORT
+   ```
+
+> **Note:** GitHub Pages only hosts static files and cannot run this Python backend. Use Render (free tier), Railway, or Fly.io to host the FastAPI app. Keep `GROQ_API_KEY` as a server-side secret — never expose it in the frontend or commit it to GitHub.
+
 ## Project Structure
 
 ```
 SmartSummarizer/
 ├── .env.example
 ├── requirements.txt
+├── render.yaml           # Render.com deploy config
 ├── README.md
 ├── smartsummarizer/
 │   ├── __init__.py
@@ -117,7 +154,12 @@ SmartSummarizer/
 │   ├── cli.py            # CLI entry point
 │   ├── extractor.py      # URL routing + content extraction
 │   ├── summarizer.py     # Groq API + JSON validation
-│   └── models.py         # Pydantic schemas
+│   ├── models.py         # Pydantic schemas
+│   ├── static/           # Web UI (HTML, CSS, JS)
+│   └── web/
+│       ├── __main__.py   # python -m smartsummarizer.web
+│       ├── app.py        # FastAPI routes
+│       └── service.py    # Extract + summarize
 └── tests/
     ├── test_extractor.py
     └── test_summarizer.py
@@ -146,3 +188,4 @@ pytest tests/ -v
 | `requests` + `beautifulsoup4` | Webpage fallback |
 | `pydantic` | JSON validation |
 | `python-dotenv` | Load `GROQ_API_KEY` from `.env` |
+| `fastapi` + `uvicorn` | Web UI and REST API |

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartSummarizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <span class="brand-icon">◈</span>
+        <h1>SmartSummarizer</h1>
+      </div>
+      <p class="tagline">Paste a link. Get an instant summary.</p>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-form">
+        <h2>Summarize a URL</h2>
+        <form id="summarize-form" class="summarize-form">
+          <label for="url-input">URL</label>
+          <input
+            id="url-input"
+            type="url"
+            name="url"
+            placeholder="https://youtube.com/watch?v=… or any article"
+            required
+            autocomplete="off"
+          />
+          <details class="advanced">
+            <summary>Advanced options</summary>
+            <label for="model-select">Groq model</label>
+            <select id="model-select" name="model">
+              <option value="llama-3.3-70b-versatile" selected>llama-3.3-70b-versatile</option>
+              <option value="openai/gpt-oss-20b">openai/gpt-oss-20b</option>
+              <option value="openai/gpt-oss-120b">openai/gpt-oss-120b</option>
+            </select>
+          </details>
+          <button type="submit" id="submit-btn">
+            <span class="btn-label">Summarize</span>
+            <span class="btn-spinner hidden" aria-hidden="true"></span>
+          </button>
+        </form>
+        <div id="form-error" class="alert alert-error hidden" role="alert"></div>
+      </section>
+
+      <section class="panel panel-result" id="result-panel">
+        <div id="result-placeholder" class="result-placeholder">
+          <p>Your summary will appear here.</p>
+        </div>
+        <article id="result-content" class="result-content hidden">
+          <header class="result-header">
+            <div class="badges">
+              <span id="result-source" class="badge badge-source"></span>
+              <span id="result-sentiment" class="badge badge-sentiment"></span>
+            </div>
+            <h2 id="result-title"></h2>
+            <a id="result-url" href="#" target="_blank" rel="noopener noreferrer"></a>
+            <p class="result-meta">
+              <span id="result-words"></span> words · <span id="result-model"></span>
+            </p>
+          </header>
+          <section>
+            <h3>Summary</h3>
+            <p id="result-summary" class="result-summary"></p>
+          </section>
+          <section>
+            <h3>Key points</h3>
+            <ul id="result-key-points" class="key-points"></ul>
+          </section>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
