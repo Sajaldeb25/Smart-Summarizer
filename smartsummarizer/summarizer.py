@@ -37,8 +37,9 @@ class SummarizationError(Exception):
 def _build_user_message(content: ExtractedContent, word_count: int) -> str:
     text = content.text
 
-    
+    # check if the text is longer than the maximum character count
     if len(text) > _MAX_CHARS:
+        # truncate the text if it is longer than the maximum character count
         text = text[:_MAX_CHARS] + " [truncated]"
 
     return (
@@ -108,7 +109,7 @@ def summarize(content: ExtractedContent, api_key: str | None = None, model: str 
             data["word_count"] = word_count
             return SummaryOutput.model_validate(data)
 
-            
+
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = exc
             # Retry once with a stricter reminder in the user message

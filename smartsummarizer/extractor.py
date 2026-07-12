@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+# youtube_transcript_api is used to extract the transcript from a YouTube video
 try:
     from youtube_transcript_api import (
         NoTranscriptFound,
@@ -21,6 +22,7 @@ except ImportError:
     TranscriptsDisabled = None  # type: ignore[assignment]
     NoTranscriptFound = None  # type: ignore[assignment]
 
+# newspaper3k is used to extract the content from a webpage
 try:
     from newspaper import Article, ArticleException
     _NEWSPAPER_AVAILABLE = True
@@ -38,6 +40,7 @@ class ExtractionError(Exception):
 
 def _extract_youtube_video_id(url: str) -> str | None:
     """Return the YouTube video ID from a URL, or None if not a YouTube URL."""
+    
     parsed = urlparse(url)
     netloc = parsed.netloc.lower().lstrip("www.")
 
@@ -81,21 +84,32 @@ def _extract_youtube(url: str, video_id: str) -> ExtractedContent:
       YouTubeTranscriptApi().list(video_id) → TranscriptList
       transcript_list.find_transcript([...]).fetch() → FetchedTranscript
     """
+    # check if youtube-transcript-api is installed
     if not _YOUTUBE_AVAILABLE:
         raise ExtractionError("youtube-transcript-api is not installed.")
 
     try:
+        # create an instance of the YouTubeTranscriptApi class
         api = YouTubeTranscriptApi()
+
+        # list the transcripts for the video
         transcript_list = api.list(video_id)
-        # Prefer manually-created transcripts, then fall back to auto-generated,
+        
+        # prefer manually-created transcripts, then fall back to auto-generated,
         # across any available language.
         available_langs = [t.language_code for t in transcript_list]
         try:
             transcript = transcript_list.find_manually_created_transcript(available_langs)
         except NoTranscriptFound:
             transcript = transcript_list.find_generated_transcript(available_langs)
+
+        # fetch the transcript
         fetched = transcript.fetch()
+
+        # join the transcript snippets into a single string
         text = " ".join(snippet.text for snippet in fetched)
+
+
     except TranscriptsDisabled:
         raise ExtractionError(
             f"Transcripts are disabled for video '{video_id}'. "
@@ -112,7 +126,10 @@ def _extract_youtube(url: str, video_id: str) -> ExtractedContent:
     if not text.strip():
         raise ExtractionError(f"Transcript for video '{video_id}' is empty.")
 
+    # fetch the title of the video
     title = _fetch_youtube_title(video_id)
+
+    # return the extracted content with verification by ExtractedContent class
     return ExtractedContent(title=title, text=text, source_type="youtube")
 
 
@@ -122,6 +139,7 @@ def _extract_article(url: str) -> ExtractedContent:
         raise ExtractionError("newspaper3k is not installed.")
 
     try:
+        # create an instance of the Article class
         article = Article(url)
         article.download()
         article.parse()
@@ -130,11 +148,17 @@ def _extract_article(url: str) -> ExtractedContent:
     except Exception as exc:
         raise ExtractionError(f"newspaper3k encountered an unexpected error: {exc}") from exc
 
+    # get the text of the article
     text = article.text.strip()
+
+    # check if the text is empty
     if not text:
         raise ExtractionError(f"newspaper3k extracted empty text from '{url}'.")
 
+    # get the title of the article
     title = article.title.strip() or _infer_title_from_url(url)
+
+    # return the extracted content with verification by ExtractedContent class
     return ExtractedContent(title=title, text=text, source_type="article")
 
 
@@ -197,6 +221,8 @@ def extract(url: str) -> ExtractedContent:
     3. newspaper3k failure                →  requests + BeautifulSoup fallback
     """
     url = url.strip()
+
+    #four method for four types of urls 
 
     video_id = _extract_youtube_video_id(url)
     if video_id:

@@ -4,6 +4,9 @@ from pydantic import BaseModel, Field
 
 
 class SummaryOutput(BaseModel):
+
+    # fields for the summary output
+
     title: str = Field(description="Extracted or inferred title of the content")
     key_points: list[str] = Field(
         min_length=1,
@@ -20,6 +23,9 @@ class SummaryOutput(BaseModel):
 
 
 class ExtractedContent(BaseModel):
+
+    # fields for the extracted content
+
     title: str
     text: str
     source_type: Literal["youtube", "article", "webpage"]
