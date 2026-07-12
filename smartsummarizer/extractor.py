@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from urllib.parse import parse_qs, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 # youtube_transcript_api is used to extract the transcript from a YouTube video
 try:
@@ -85,12 +88,106 @@ def _fetch_youtube_title(video_id: str) -> str:
     return f"YouTube Video ({video_id})"
 
 
+SUPADATA_TRANSCRIPT_URL = "https://api.supadata.ai/v1/youtube/transcript"
+
+
+def _parse_supadata_transcript(data: object) -> str:
+    """Parse transcript text from Supadata API JSON response."""
+    if isinstance(data, str):
+        return data.strip()
+
+    if not isinstance(data, dict):
+        raise ExtractionError("Unexpected Supadata response format.")
+
+    content = data.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return " ".join(
+            segment.get("text", "") for segment in content if isinstance(segment, dict)
+        ).strip()
+
+    if isinstance(data.get("text"), str):
+        return data["text"].strip()
+
+    raise ExtractionError("Supadata returned no transcript content.")
+
+
+def _fetch_youtube_transcript_supadata(video_id: str, api_key: str) -> str:
+    """Fetch transcript via Supadata (works on cloud hosts; free tier: 100 req/month)."""
+    logger.info("Supadata: fetching transcript for video_id=%s", video_id)
+    try:
+        resp = requests.get(
+            SUPADATA_TRANSCRIPT_URL,
+            params={"videoId": video_id, "text": "true"},
+            headers={"x-api-key": api_key},
+            timeout=45,
+        )
+    except requests.RequestException as exc:
+        logger.error("Supadata: network error for video_id=%s — %s", video_id, exc)
+        raise ExtractionError(f"Supadata request failed: {exc}") from exc
+
+    logger.info(
+        "Supadata: response video_id=%s status=%s content_length=%s",
+        video_id,
+        resp.status_code,
+        len(resp.content),
+    )
+
+    if resp.status_code == 401:
+        logger.error("Supadata: invalid API key (401) for video_id=%s", video_id)
+        raise ExtractionError("Invalid SUPADATA_API_KEY.")
+    if resp.status_code == 404:
+        logger.warning("Supadata: no transcript (404) for video_id=%s", video_id)
+        raise ExtractionError(
+            f"No transcript found for video '{video_id}'. "
+            "The video may not have captions available."
+        )
+    if resp.status_code == 429:
+        logger.error("Supadata: rate limit (429) for video_id=%s", video_id)
+        raise ExtractionError(
+            "Supadata rate limit reached (free tier: 100 credits/month, 1 req/sec). "
+            "Try again later or upgrade your Supadata plan."
+        )
+    if not resp.ok:
+        detail = resp.text[:300] if resp.text else resp.reason
+        logger.error(
+            "Supadata: API error video_id=%s status=%s detail=%s",
+            video_id,
+            resp.status_code,
+            detail,
+        )
+        raise ExtractionError(f"Supadata API error ({resp.status_code}): {detail}")
+
+    try:
+        data = resp.json()
+    except ValueError:
+        if resp.text.strip():
+            word_count = len(resp.text.split())
+            logger.info(
+                "Supadata: plain-text transcript OK video_id=%s words=%s",
+                video_id,
+                word_count,
+            )
+            return resp.text.strip()
+        logger.error("Supadata: non-JSON empty response for video_id=%s", video_id)
+        raise ExtractionError("Supadata returned a non-JSON response.") from None
+
+    text = _parse_supadata_transcript(data)
+    logger.info(
+        "Supadata: transcript OK video_id=%s words=%s chars=%s",
+        video_id,
+        len(text.split()),
+        len(text),
+    )
+    return text
+
+
 def _youtube_ip_blocked_message() -> str:
     return (
         "YouTube blocked this request because the server runs on a cloud IP "
-        "(common on Render, AWS, etc.). YouTube URLs work locally but often fail "
-        "when hosted. Try an article or blog URL instead, run the CLI on your machine, "
-        "or configure a residential proxy via YOUTUBE_PROXY_URL (see README)."
+        "(common on Render, AWS, etc.). Set SUPADATA_API_KEY on your host for YouTube "
+        "in production (100 free requests/month at supadata.ai), or run the CLI locally."
     )
 
 
@@ -114,62 +211,87 @@ def _create_youtube_api() -> YouTubeTranscriptApi:
     return YouTubeTranscriptApi()
 
 
-def _extract_youtube(url: str, video_id: str) -> ExtractedContent:
-    """Extract transcript and title from a YouTube video.
-
-    Uses the youtube-transcript-api v1.x instance-based API:
-      YouTubeTranscriptApi().list(video_id) → TranscriptList
-      transcript_list.find_transcript([...]).fetch() → FetchedTranscript
-    """
-    # check if youtube-transcript-api is installed
+def _fetch_youtube_transcript_local(video_id: str) -> str:
+    """Fetch transcript via youtube-transcript-api (free; blocked on many cloud IPs)."""
     if not _YOUTUBE_AVAILABLE:
         raise ExtractionError("youtube-transcript-api is not installed.")
 
+    api = _create_youtube_api()
+    transcript_list = api.list(video_id)
+    available_langs = [t.language_code for t in transcript_list]
     try:
-        api = _create_youtube_api()
-
-        # list the transcripts for the video
-        transcript_list = api.list(video_id)
-        
-        # prefer manually-created transcripts, then fall back to auto-generated,
-        # across any available language.
-        available_langs = [t.language_code for t in transcript_list]
-        try:
-            transcript = transcript_list.find_manually_created_transcript(available_langs)
-        except NoTranscriptFound:
-            transcript = transcript_list.find_generated_transcript(available_langs)
-
-        # fetch the transcript
-        fetched = transcript.fetch()
-
-        # join the transcript snippets into a single string
-        text = " ".join(snippet.text for snippet in fetched)
-
-
-    except TranscriptsDisabled:
-        raise ExtractionError(
-            f"Transcripts are disabled for video '{video_id}'. "
-            "Try a different video or provide an article URL instead."
-        )
+        transcript = transcript_list.find_manually_created_transcript(available_langs)
     except NoTranscriptFound:
-        raise ExtractionError(
-            f"No transcript found for video '{video_id}'. "
-            "The video may not have captions available."
+        transcript = transcript_list.find_generated_transcript(available_langs)
+    fetched = transcript.fetch()
+    return " ".join(snippet.text for snippet in fetched)
+
+
+def _extract_youtube(url: str, video_id: str) -> ExtractedContent:
+    """Extract transcript and title from a YouTube video.
+
+    Uses Supadata when SUPADATA_API_KEY is set (recommended for Render/production).
+    Otherwise uses youtube-transcript-api (works locally).
+    """
+    supadata_key = os.getenv("SUPADATA_API_KEY", "").strip()
+    text = ""
+
+    if supadata_key:
+        logger.info(
+            "YouTube extract: using Supadata (video_id=%s, api_key_set=True)",
+            video_id,
         )
-    except (IpBlocked, RequestBlocked):
-        raise ExtractionError(_youtube_ip_blocked_message())
-    except Exception as exc:
-        if "blocking requests from your IP" in str(exc) or "IpBlocked" in type(exc).__name__:
-            raise ExtractionError(_youtube_ip_blocked_message()) from exc
-        raise ExtractionError(f"Failed to fetch YouTube transcript: {exc}") from exc
+        try:
+            text = _fetch_youtube_transcript_supadata(video_id, supadata_key)
+            logger.info("YouTube extract: Supadata succeeded for video_id=%s", video_id)
+        except ExtractionError as exc:
+            logger.error(
+                "YouTube extract: Supadata failed for video_id=%s — %s",
+                video_id,
+                exc,
+            )
+            raise
+        except Exception as exc:
+            logger.exception(
+                "YouTube extract: unexpected Supadata error for video_id=%s",
+                video_id,
+            )
+            raise ExtractionError(f"Supadata transcript fetch failed: {exc}") from exc
+    else:
+        logger.info(
+            "YouTube extract: SUPADATA_API_KEY not set, using youtube-transcript-api "
+            "(video_id=%s)",
+            video_id,
+        )
+        try:
+            text = _fetch_youtube_transcript_local(video_id)
+            logger.info(
+                "YouTube extract: local transcript API succeeded for video_id=%s words=%s",
+                video_id,
+                len(text.split()),
+            )
+        except TranscriptsDisabled:
+            logger.warning("YouTube extract: transcripts disabled for video_id=%s", video_id)
+            raise ExtractionError(
+                f"Transcripts are disabled for video '{video_id}'. "
+                "Try a different video or provide an article URL instead."
+            )
+        except NoTranscriptFound:
+            raise ExtractionError(
+                f"No transcript found for video '{video_id}'. "
+                "The video may not have captions available."
+            )
+        except (IpBlocked, RequestBlocked):
+            raise ExtractionError(_youtube_ip_blocked_message())
+        except Exception as exc:
+            if "blocking requests from your IP" in str(exc):
+                raise ExtractionError(_youtube_ip_blocked_message()) from exc
+            raise ExtractionError(f"Failed to fetch YouTube transcript: {exc}") from exc
 
     if not text.strip():
         raise ExtractionError(f"Transcript for video '{video_id}' is empty.")
 
-    # fetch the title of the video
     title = _fetch_youtube_title(video_id)
-
-    # return the extracted content with verification by ExtractedContent class
     return ExtractedContent(title=title, text=text, source_type="youtube")
 
 

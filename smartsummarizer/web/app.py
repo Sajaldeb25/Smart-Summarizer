@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -14,6 +16,11 @@ from ..summarizer import DEFAULT_MODEL
 from .service import WebServiceError, summarize_url
 
 load_dotenv()
+
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
